@@ -3,3 +3,4 @@ black==22.3.0
 torch>=1.12.1
 git+https://github.com/openai/CLIP.git
 kaggle
+pillow==7.1.2
