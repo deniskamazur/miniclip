@@ -1,63 +1,66 @@
-import glob
-import json
-import os
+import logging
 
+import clip
 import torch
-from PIL import Image
-from torch.utils.data import Dataset
+from torch import nn, optim
+
+img_loss = nn.CrossEntropyLoss()
+txt_loss = nn.CrossEntropyLoss()
 
 
-class MemeDataset(Dataset):
-    def __init__(self, data, preprocess):
-        self.preprocess = preprocess
-        self.img_paths = []
-        self.captions = []
-        for img_path, captions in data.items():
-            for cap in captions:
-                self.img_paths.append(img_path)
-                self.captions.append(cap)
-        self.processed_cache = {}
-        for img_path in data:
-            self.processed_cache[img_path] = self.preprocess(Image.open(img_path))
-        self.img_paths_set = list(data.keys())
-        self.path2label = {path: self.img_paths_set.index(path) for path in self.img_paths_set}
+def evaluate_model(model, test_loader, device):
+    model.eval()
 
-    def __len__(self):
-        return len(self.captions)
+    with torch.no_grad():
+        eval_loss = 0
+        for imgs, txts, _ in test_loader:
+            imgs = imgs.to(device)
+            txts = clip.tokenize(txts).to(device)
 
-    def __getitem__(self, idx):
-        img_path = self.img_paths[idx]
-        image = self.processed_cache[img_path]
-        caption = self.captions[idx]
-        label = self.path2label[img_path]
-        return image, caption, label
+            logits_per_image, logits_per_text = model(imgs, txts)
+            ground_truth = torch.arange(test_loader.batch_size).to(device)
 
-    @classmethod
-    def load_data(cls, img_root, json_root, preprocess):
-        img_paths = glob.glob(os.path.join(img_root, "*.jpg"))
-        img_path_to_caption = dict()
+            total_loss = (img_loss(logits_per_image, ground_truth) + txt_loss(logits_per_text, ground_truth)) / 2
+            eval_loss += total_loss * imgs.size(0)
 
-        for img_path in img_paths:
-            name = img_path.split("/")[-1].split(".")[0]
+        eval_loss = eval_loss / len(test_loader.dataset)
 
-            with open(os.path.join(json_root, name + ".json"), "r") as f:
-                captions = json.load(f)
-                temp = []
-
-                for cap in captions:
-                    cap_cat = cap[0] + " " + cap[1]
-                    if "http" not in (cap_cat) and 8 <= len(cap_cat) <= 72:
-                        temp.append(cap_cat)
-
-                img_path_to_caption[img_path] = temp
-
-        return cls(img_path_to_caption, preprocess)
+    return eval_loss
 
 
-def train_val_split(dataset, train_proportion=0.8):
-    train_size = int(len(dataset) * train_proportion)
-    val_size = len(dataset) - train_size
+def train_model(model, train_loader, test_loader, device, num_epochs=200, learning_rate=1e-5):
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        len(train_loader) * num_epochs,
+    )
 
-    lengths = [train_size, val_size]
+    for epoch in range(num_epochs):
+        model.train()
 
-    return torch.utils.data.random_split(dataset, lengths)
+        train_loss = 0
+        for imgs, txts, _ in train_loader:
+            imgs = imgs.to(device)
+            txts = clip.tokenize(txts).to(device)
+
+            optimizer.zero_grad()
+
+            logits_per_image, logits_per_text = model(imgs, txts)
+            ground_truth = torch.arange(train_loader.batch_size).to(device)
+
+            total_loss = (img_loss(logits_per_image, ground_truth) + txt_loss(logits_per_text, ground_truth)) / 2
+            total_loss.backward()
+
+            train_loss += total_loss.item()
+
+            optimizer.step()
+            scheduler.step()
+
+        train_loss /= len(train_loader.dataset)
+
+        model.eval()
+        eval_loss = evaluate_model(model, test_loader, device)
+
+        logging.info(f"Epoch: {epoch}, train loss: {train_loss}, eval loss: {eval_loss}")
+
+    return model
