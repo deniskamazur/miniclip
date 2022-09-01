@@ -37,7 +37,7 @@ class MemeDataset(Dataset):
         return image, caption, label
 
     @classmethod
-    def load_data(cls, img_root, json_root, preprocess):
+    def from_directories(cls, img_root, json_root, preprocess):
         img_paths = glob.glob(os.path.join(img_root, "*.jpg"))
         img_path_to_caption = dict()
 
