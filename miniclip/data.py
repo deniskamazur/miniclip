@@ -23,7 +23,7 @@ class MemeDataset(Dataset):
         self.img_paths_set = list(data.keys())
         self.path2label = {path: self.img_paths_set.index(path) for path in self.img_paths_set}
 
-        if len(self):
+        if len(self) == 0:
             warnings.warn("Dataset has zero size")
 
     def __len__(self):
